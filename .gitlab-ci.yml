@@ -1,0 +1,47 @@
+stages:
+  - deploy_infra
+  - deploy_site
+
+variables:
+  STACK_NAME: "MyStaticSiteStack"
+  # Replace with the name of the KeyPair you created in AWS
+  KEY_NAME: "my-key-pair"
+  # Replace with your actual GitHub (or GitLab) HTTPS repo URL
+  REPO_URL: "https://github.com"
+
+# Stage 1: Deploy/Update the AWS Infrastructure
+infrastructure:
+  stage: deploy_infra
+  image: 
+    name: amazon/aws-cli
+    entrypoint: [""]
+  script:
+    - echo "Deploying CloudFormation stack..."
+    - |
+      aws cloudformation deploy \
+        --stack-name $STACK_NAME \
+        --template-file template.yaml \
+        --parameter-overrides KeyName=$KEY_NAME GitHubRepoURL=$REPO_URL \
+        --capabilities CAPABILITY_IAM
+    # Get the Public IP of the instance for the next stage
+    - export INSTANCE_IP=$(aws ec2 describe-instances --filters "Name=tag:aws:cloudformation:stack-name,Values=$STACK_NAME" --query "Reservations[*].Instances[*].PublicIpAddress" --output text)
+    - echo "INSTANCE_IP=$INSTANCE_IP" >> deploy.env
+  artifacts:
+    reports:
+      dotenv: deploy.env
+
+# Stage 2: Force a fresh sync of files (Optional - UserData handles this on first boot)
+# This stage is used if you want to push code changes without deleting the EC2
+site_update:
+  stage: deploy_site
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache openssh-client
+    - mkdir -p ~/.ssh
+    - echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+    - chmod 600 ~/.ssh/id_rsa
+  script:
+    - echo "Updating website code on $INSTANCE_IP..."
+    - ssh -o StrictHostKeyChecking=no ec2-user@$INSTANCE_IP "cd /var/www/html && sudo git pull origin main"
+  only:
+    - main
